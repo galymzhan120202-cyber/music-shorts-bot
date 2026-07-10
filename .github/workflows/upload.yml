@@ -41,7 +41,7 @@ jobs:
       - name: .env файлын жасау
         run: |
           cat > .env << 'EOF'
-          GEMINI_API_KEY=${{ secrets.MUSIC_GEMINI_API_KEY }}
+          GROQ_API_KEY=${{ secrets.MUSIC_GROQ_API_KEY }}
           PEXELS_API_KEY=${{ secrets.MUSIC_PEXELS_API_KEY }}
           EDGE_TTS_VOICE=en-US-GuyNeural
           MUSIC_VOLUME=0.08

@@ -30,7 +30,7 @@ load_dotenv()
 
 # --- ПАРАМЕТРЛЕР (ОРТА АЙНЫМАЛАЛАРДАН) ---
 base_dir = os.getenv('BASE_DIR', os.path.dirname(os.path.abspath(__file__)))
-GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '')
+GROQ_API_KEY = os.getenv('GROQ_API_KEY', '')
 PEXELS_API_KEY = os.getenv('PEXELS_API_KEY', '')
 EDGE_TTS_VOICE = os.getenv('EDGE_TTS_VOICE', 'en-US-GuyNeural')
 TELEGRAM_NOTIFY_TOKEN = os.getenv('TELEGRAM_NOTIFY_TOKEN', '')
@@ -68,8 +68,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # API ключтарын тексеру
-if not GEMINI_API_KEY:
-    logger.warning('⚠️ GEMINI_API_KEY .env файлында жоқ!')
+if not GROQ_API_KEY:
+    logger.warning('⚠️ GROQ_API_KEY .env файлында жоқ!')
 
 SUBTITLE_CHAR_MAP = {
     '—': '-', '–': '-', ''': "'", ''': "'", '"': '"', '"': '"', '…': '...',
@@ -366,18 +366,13 @@ def send_telegram(message: str):
     except Exception:
         pass
 
-def get_gemini_content(track=None):
-    """Gemini-дан сценарий + тақырып + хештегтер алу. `track` берілсе (Deezer-ден
-    табылған трендтегі ән), сценарий сол әнге негізделеді; болмаса жалпы
-    music-тақырыпты фактпен ауыстырылады."""
-    logger.info("📝 Gemini-дан контент жазылуда...")
+def get_ai_content(track=None):
+    """Groq API (OpenAI-үйлесімді chat completions) арқылы сценарий + тақырып +
+    хештегтер алу. `track` берілсе (Deezer-ден табылған трендтегі ән), сценарий
+    сол әнге негізделеді; болмаса жалпы music-тақырыпты фактпен ауыстырылады."""
+    logger.info("📝 Groq-тан контент жазылуда...")
 
-    models_to_try = [
-        f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}",
-        f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}",
-        f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key={GEMINI_API_KEY}",
-        f"https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}",
-    ]
+    models_to_try = ["openai/gpt-oss-20b", "openai/gpt-oss-120b", "qwen/qwen3.6-27b"]
 
     hook_start = random.choice(HOOK_STARTERS)
     rotating_tags = ' '.join(random.sample(STRONG_HASHTAG_POOL, 5))
@@ -418,42 +413,47 @@ def get_gemini_content(track=None):
             'exactly as given.'
         )
 
-    for url in models_to_try:
+    for model_name in models_to_try:
         try:
-            model_name = url.split("models/")[1].split(":")[0] if "models/" in url else "unknown"
             logger.info(f"🔄 Модель сынау: {model_name}")
 
             response = requests.post(
-                url,
-                json={"contents": [{"parts": [{"text": prompt}]}]},
+                "https://api.groq.com/openai/v1/chat/completions",
+                json={
+                    "model": model_name,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.8,
+                },
                 timeout=15,
-                headers={"Content-Type": "application/json"}
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {GROQ_API_KEY}",
+                }
             )
 
             if response.status_code == 200:
                 payload = response.json()
-                if 'candidates' in payload and payload['candidates']:
-                    parts = payload['candidates'][0].get('content', {}).get('parts', [])
-                    if parts and 'text' in parts[0]:
-                        raw = parts[0]['text'].strip()
-                        json_match = re.search(r'\{.*\}', raw, re.DOTALL)
-                        if json_match:
-                            data = json.loads(json_match.group())
-                            script = validate_script(data.get('script', ''))
-                            default_title = f'{track["title"]} — {track["artist"]}' if track else 'Music Facts #shorts'
-                            title = data.get('title', default_title)[:100]
-                            hashtags = data.get('hashtags', f'{niche_tags} {rotating_tags} #shorts')
-                            description = f"{script}\n\n{hashtags}"
-                            tags = parse_hashtags_to_tags(hashtags)
-                            logger.info(f"✓ Контент дайын")
-                            return script, title, description, tags
+                choices = payload.get("choices", [])
+                if choices:
+                    raw = choices[0].get("message", {}).get("content", "").strip()
+                    json_match = re.search(r'\{.*\}', raw, re.DOTALL)
+                    if json_match:
+                        data = json.loads(json_match.group())
+                        script = validate_script(data.get('script', ''))
+                        default_title = f'{track["title"]} — {track["artist"]}' if track else 'Music Facts #shorts'
+                        title = data.get('title', default_title)[:100]
+                        hashtags = data.get('hashtags', f'{niche_tags} {rotating_tags} #shorts')
+                        description = f"{script}\n\n{hashtags}"
+                        tags = parse_hashtags_to_tags(hashtags)
+                        logger.info(f"✓ Контент дайын")
+                        return script, title, description, tags
             else:
                 logger.warning(f"⚠️ {model_name}: HTTP {response.status_code}")
 
         except Exception as e:
             logger.warning(f"⚠️ {model_name} қатесі: {str(e)[:100]}")
 
-    logger.warning("⚠️ Gemini сәтсіз, резервтік контент қолданылуда")
+    logger.warning("⚠️ Groq сәтсіз, резервтік контент қолданылуда")
     if track:
         fallback_script = (
             f'{hook_start} "{track["title"]}" by {track["artist"]} is suddenly everywhere. '
@@ -619,7 +619,7 @@ def generate_video(script_override: str = None, skip_upload: bool = False):
             video_tags = parse_hashtags_to_tags(override_hashtags)
             logger.info("Жіберілген мәтін қолданылды")
         else:
-            script, video_title, video_description, video_tags = retry_with_backoff(lambda: get_gemini_content(track))
+            script, video_title, video_description, video_tags = retry_with_backoff(lambda: get_ai_content(track))
 
         logger.info(f"📝 Сценарий: {script[:80]}...")
         logger.info(f"🏷️ Тақырып: {video_title}")
