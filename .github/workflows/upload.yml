@@ -44,7 +44,7 @@ jobs:
           GEMINI_API_KEY=${{ secrets.MUSIC_GEMINI_API_KEY }}
           PEXELS_API_KEY=${{ secrets.MUSIC_PEXELS_API_KEY }}
           EDGE_TTS_VOICE=en-US-GuyNeural
-          MUSIC_VOLUME=0.15
+          MUSIC_VOLUME=0.08
           TELEGRAM_NOTIFY_TOKEN=${{ secrets.MUSIC_TELEGRAM_NOTIFY_TOKEN }}
           TELEGRAM_NOTIFY_CHAT_ID=${{ secrets.MUSIC_TELEGRAM_NOTIFY_CHAT_ID }}
           YOUTUBE_CATEGORY_ID=10

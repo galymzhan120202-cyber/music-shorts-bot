@@ -36,8 +36,8 @@ EDGE_TTS_VOICE = os.getenv('EDGE_TTS_VOICE', 'en-US-GuyNeural')
 TELEGRAM_NOTIFY_TOKEN = os.getenv('TELEGRAM_NOTIFY_TOKEN', '')
 TELEGRAM_NOTIFY_CHAT_ID = os.getenv('TELEGRAM_NOTIFY_CHAT_ID', '')
 
-# Трендтегі әннің дауысы астында қаншалық естілетінін реттейді (0-1 аралығы)
-MUSIC_VOLUME = float(os.getenv('MUSIC_VOLUME', '0.15'))
+# Фон музыканың дауыс астында қаншалық естілетінін реттейді (0-1 аралығы)
+MUSIC_VOLUME = float(os.getenv('MUSIC_VOLUME', '0.08'))
 
 # Қайтара сынау параметрлері
 MAX_RETRIES = int(os.getenv('MAX_RETRIES', '3'))
@@ -115,8 +115,8 @@ def ensure_directories_exist():
     if not bg_files and not PEXELS_API_KEY:
         raise FileNotFoundError("❌ backgrounds/ бос және PEXELS_API_KEY орнатылмаған")
 
-    # Музыка — Deezer preview API арқылы (кілт керек емес). Толық сәтсіздік болса,
-    # generate_video ішінде локал fallback (music/fallback*.mp3) тексеріледі.
+    # Музыка — Openverse API арқылы (кілт керек емес, royalty-free). Толық сәтсіздік
+    # болса, generate_video ішінде локал fallback (music/fallback*.mp3) тексеріледі.
 
     logger.info("✓ Барлық папқалар дайын")
 
@@ -231,11 +231,13 @@ def fetch_pexels_background():
         logger.warning(f"⚠️ Pexels қатесі, локал fallback қолданылады: {str(e)[:100]}")
         return None
 
-def fetch_deezer_track():
+def fetch_trending_song_info():
     """Deezer Chart API арқылы қазіргі трендтегі әндер тізімінен кездейсоқ
-    трек таңдау және оның 30-секундтық ресми preview файлын жүктеп алу.
-    OAuth/кілт керек емес, ашық және тегін. Сәтсіз болса — None қайтарады
-    (локал music/fallback*.mp3 fallback үшін)."""
+    трек метадеректерін (атауы/әртісі/сілтемесі) алу — АУДИО ЖҮКТЕЛМЕЙДІ.
+    Сценарийді нақты трендтегі әнге негіздеу үшін ғана қолданылады; видеоның
+    нақты дыбысы бөлек, royalty-free көзден алынады (авторлық құқық
+    тәуекелінен аулақ болу үшін). OAuth/кілт керек емес. Сәтсіз болса —
+    None қайтарады (жалпы music-тақырыпты fallback үшін)."""
     try:
         response = requests.get(
             "https://api.deezer.com/chart/0/tracks",
@@ -244,33 +246,111 @@ def fetch_deezer_track():
         )
         response.raise_for_status()
         tracks = response.json().get("data", [])
-        candidates = [t for t in tracks if t.get("preview")]
-        if not candidates:
-            logger.warning("⚠️ Deezer: чарттан preview бар трек табылмады")
+        if not tracks:
+            logger.warning("⚠️ Deezer: чарт бос қайтты")
             return None
 
-        track = random.choice(candidates)
-        dest = os.path.join(base_dir, "music", "_deezer_temp.mp3")
-
-        dl_response = requests.get(track["preview"], stream=True, timeout=30)
-        dl_response.raise_for_status()
-
-        with open(dest, "wb") as f:
-            for chunk in dl_response.iter_content(chunk_size=1024 * 256):
-                f.write(chunk)
-
-        if os.path.getsize(dest) < 10_000:
-            raise Exception("Жүктелген preview тым кіші")
-
+        track = random.choice(tracks)
         title = track.get("title", "Untitled")
         artist = (track.get("artist") or {}).get("name", "Unknown Artist")
         link = track.get("link", "")
-        logger.info(f"✓ Deezer-ден трек жүктелді: '{title}' — {artist}")
-        return {"path": dest, "title": title, "artist": artist, "link": link}
+        logger.info(f"✓ Deezer чартынан таңдалды: '{title}' — {artist}")
+        return {"title": title, "artist": artist, "link": link}
 
     except Exception as e:
-        logger.warning(f"⚠️ Deezer қатесі, локал fallback қолданылады: {str(e)[:100]}")
+        logger.warning(f"⚠️ Deezer қатесі, жалпы music-тақырып қолданылады: {str(e)[:100]}")
         return None
+
+MUSIC_QUERIES = [
+    "upbeat", "energetic", "pop instrumental", "cinematic", "inspiring",
+    "electronic", "synth", "chill", "trending", "instrumental",
+]
+
+def _try_fetch_openverse_music(query, min_duration_sec):
+    """Бір сұраныс бойынша Openverse-тен лайықты трек іздеп көру. Таппаса — None."""
+    response = requests.get(
+        "https://api.openverse.org/v1/audio/",
+        params={
+            "q": query,
+            "category": "music",
+            "license": "cc0,by",
+            "page_size": 20,
+        },
+        timeout=15,
+        headers={"User-Agent": "MusicShortsBot/1.0 (automated background music fetch)"}
+    )
+    response.raise_for_status()
+    results = response.json().get("results", [])
+
+    min_duration_ms = (min_duration_sec + 5) * 1000
+    candidates = [
+        r for r in results
+        if r.get("duration") and r["duration"] >= min_duration_ms and r.get("url")
+    ]
+    if not candidates:
+        logger.warning(f"⚠️ Openverse: '{query}' бойынша лайықты трек табылмады")
+        return None
+
+    track = random.choice(candidates)
+    dest = os.path.join(base_dir, "music", "_openverse_temp.mp3")
+
+    dl_response = requests.get(track["url"], stream=True, timeout=30)
+    dl_response.raise_for_status()
+
+    with open(dest, "wb") as f:
+        for chunk in dl_response.iter_content(chunk_size=1024 * 256):
+            f.write(chunk)
+
+    if os.path.getsize(dest) < 10_000:
+        raise Exception("Жүктелген музыка тым кіші")
+
+    license_type = (track.get("license") or "").lower()
+    attribution = None
+    if license_type and license_type != "cc0":
+        creator = track.get("creator", "Unknown artist")
+        title = track.get("title", "Untitled")
+        source_url = track.get("foreign_landing_url") or track.get("url")
+        attribution = f'Music: "{title}" by {creator} ({license_type.upper()}) — {source_url}'
+
+    logger.info(f"✓ Openverse-тен музыка жүктелді (сұрау: '{query}', лицензия: {license_type or 'белгісіз'})")
+    return dest, attribution
+
+def fetch_openverse_music(min_duration_sec):
+    """Openverse API (Jamendo/Freesound/Wikimedia CC-каталогы) арқылы CC0/CC-BY
+    royalty-free музыка іздеп жүктеп алу. OAuth/кілт керек емес. Бірнеше сұранысты
+    кезекпен сынайды. Сәтсіз болса — None қайтарады (локал music/ fallback үшін).
+    CC-BY трек табылса, атрибуция жолын да қайтарады."""
+    tried_queries = random.sample(MUSIC_QUERIES, min(4, len(MUSIC_QUERIES)))
+    for query in tried_queries:
+        try:
+            result = _try_fetch_openverse_music(query, min_duration_sec)
+            if result:
+                return result
+        except Exception as e:
+            logger.warning(f"⚠️ Openverse қатесі ('{query}'): {str(e)[:100]}")
+
+    logger.warning("⚠️ Openverse: барлық сұраныстар сәтсіз, локал fallback қолданылады")
+    return None
+
+def get_local_music_attribution(filename):
+    """music/fallback_attribution.json файлынан локал сақтық трек үшін CC-BY
+    атрибуциясын іздеп табу (бар болса). Файл/жазба жоқ болса — None."""
+    attribution_file = os.path.join(base_dir, "music", "fallback_attribution.json")
+    if not os.path.exists(attribution_file):
+        return None
+    try:
+        with open(attribution_file, "r", encoding="utf-8") as f:
+            entries = json.load(f)
+        for entry in entries:
+            if entry.get("file") == filename and (entry.get("license") or "").lower() != "cc0":
+                return (
+                    f'Music: "{entry.get("title", "Untitled")}" by '
+                    f'{entry.get("creator", "Unknown artist")} '
+                    f'({entry.get("license", "by").upper()}) — {entry.get("foreign_landing_url", "")}'
+                )
+    except Exception:
+        return None
+    return None
 
 def send_telegram(message: str):
     """Telegram хабарламасы жіберу"""
@@ -501,7 +581,7 @@ def cleanup_temp_files():
         os.path.join(base_dir, "TEMP_MPY_*.mp4"),
         os.path.join(base_dir, "temp_voice.mp3"),
         os.path.join(base_dir, "backgrounds", "_pexels_temp.mp4"),
-        os.path.join(base_dir, "music", "_deezer_temp.mp3")
+        os.path.join(base_dir, "music", "_openverse_temp.mp3")
     ]
     for pattern in temp_patterns:
         for temp_file in glob.glob(pattern):
@@ -521,11 +601,12 @@ def generate_video(script_override: str = None, skip_upload: bool = False):
         # Уақытша файлдарды тазалау
         cleanup_temp_files()
 
-        # Deezer-ден трендтегі трек алу (сценарий осыған негізделеді)
+        # Deezer-ден трендтегі әннің метадеректерін алу (сценарий осыған негізделеді,
+        # аудио бөлек royalty-free көзден алынады — төменде қараңыз)
         track = None
         if not script_override:
             try:
-                track = retry_with_backoff(fetch_deezer_track, max_retries=2, retry_delay=2)
+                track = retry_with_backoff(fetch_trending_song_info, max_retries=2, retry_delay=2)
             except Exception:
                 track = None
 
@@ -591,6 +672,11 @@ def generate_video(script_override: str = None, skip_upload: bool = False):
         bg_folder = os.path.join(base_dir, "backgrounds")
         music_folder = os.path.join(base_dir, "music")
 
+        total_script_duration = (
+            sentence_timestamps[-1]["start"] + sentence_timestamps[-1]["duration"]
+            if sentence_timestamps else 30
+        )
+
         try:
             bg_path = fetch_pexels_background()
 
@@ -601,19 +687,26 @@ def generate_video(script_override: str = None, skip_upload: bool = False):
                 bg_path = os.path.join(bg_folder, random.choice(bg_files))
 
             music_path = None
-            music_credit = None
-            if track:
-                music_path = track["path"]
-                music_credit = f'🎵 Featured trending track: "{track["title"]}" by {track["artist"]} (30s official preview via Deezer) — {track["link"]}'
+            music_attribution = None
+            music_result = fetch_openverse_music(total_script_duration)
+            if music_result:
+                music_path, music_attribution = music_result
 
             if not music_path:
-                music_files = [f for f in os.listdir(music_folder) if f.endswith(('.mp3', '.wav')) and not f.startswith('_deezer')]
+                music_files = [f for f in os.listdir(music_folder) if f.endswith(('.mp3', '.wav')) and not f.startswith('_openverse')]
                 if not music_files:
-                    raise FileNotFoundError("Музыка файлдары жоқ (Deezer де, локал да)")
-                music_path = os.path.join(music_folder, random.choice(music_files))
+                    raise FileNotFoundError("Музыка файлдары жоқ (Openverse де, локал да)")
+                chosen_music_file = random.choice(music_files)
+                music_path = os.path.join(music_folder, chosen_music_file)
+                music_attribution = get_local_music_attribution(chosen_music_file)
 
-            if music_credit:
-                video_description += f"\n\n{music_credit}"
+            if music_attribution:
+                video_description += f"\n\n{music_attribution}"
+
+            # Видеода нақты дыбысы жоқ, бірақ талқыланатын трек туралы ашық ақпарат
+            # (авторлық аудио қолданылмайды — тек сценарийде аталады)
+            if track:
+                video_description += f'\n\n🎤 Song discussed: "{track["title"]}" by {track["artist"]} — {track["link"]}'
 
             logger.info(f"🎵 Таңдалды - Видео: {os.path.basename(bg_path)}, Музыка: {os.path.basename(music_path)}")
 
@@ -645,7 +738,7 @@ def generate_video(script_override: str = None, skip_upload: bool = False):
             voice = AudioFileClip(temp_voice)
             music = AudioFileClip(music_path)
 
-            # Deezer preview 30 секундпен шектелген — дауыс одан ұзын болса, циклдап ұзарту
+            # Сирек жағдайда таңдалған трек дауыстан қысқа болып қалса, циклдап ұзарту
             if music.duration < voice.duration:
                 num_loops = int(voice.duration / music.duration) + 1
                 music = concatenate_audioclips([music] * num_loops)
