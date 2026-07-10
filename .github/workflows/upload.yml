@@ -1,0 +1,64 @@
+name: Music Shorts Auto Upload
+
+on:
+  schedule:
+    - cron: '0 4 * * *'    # 09:00 KZ
+    - cron: '0 10 * * *'   # 15:00 KZ
+    - cron: '0 16 * * *'   # 21:00 KZ
+  workflow_dispatch:        # Қолмен іске қосу үшін
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Код жүктеу
+        uses: actions/checkout@v4
+
+      - name: Python орнату
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: FFmpeg + ImageMagick орнату
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg imagemagick fonts-liberation fonts-dejavu
+          sudo sed -i 's/rights="none" pattern="@\*"/rights="read|write" pattern="@*"/' /etc/ImageMagick-6/policy.xml || true
+
+      - name: Python кітапханаларын орнату
+        run: pip install --quiet -r requirements.txt
+
+      - name: Құпия файлдарды дайындау
+        env:
+          MUSIC_CLIENT_SECRETS_JSON: ${{ secrets.MUSIC_CLIENT_SECRETS_JSON }}
+          MUSIC_YOUTUBE_TOKEN_JSON: ${{ secrets.MUSIC_YOUTUBE_TOKEN_JSON }}
+        run: |
+          echo "$MUSIC_CLIENT_SECRETS_JSON" > client_secrets.json
+          echo "$MUSIC_YOUTUBE_TOKEN_JSON" > youtube_token.json
+
+      - name: .env файлын жасау
+        run: |
+          cat > .env << 'EOF'
+          GEMINI_API_KEY=${{ secrets.MUSIC_GEMINI_API_KEY }}
+          PEXELS_API_KEY=${{ secrets.MUSIC_PEXELS_API_KEY }}
+          EDGE_TTS_VOICE=en-US-GuyNeural
+          MUSIC_VOLUME=0.15
+          TELEGRAM_NOTIFY_TOKEN=${{ secrets.MUSIC_TELEGRAM_NOTIFY_TOKEN }}
+          TELEGRAM_NOTIFY_CHAT_ID=${{ secrets.MUSIC_TELEGRAM_NOTIFY_CHAT_ID }}
+          YOUTUBE_CATEGORY_ID=10
+          YOUTUBE_PRIVACY_STATUS=public
+          YOUTUBE_MADE_FOR_KIDS=false
+          VIDEO_CODEC=libx264
+          AUDIO_CODEC=aac
+          VIDEO_FPS=24
+          VIDEO_PRESET=ultrafast
+          MIN_SCRIPT_LENGTH=20
+          MAX_SCRIPT_LENGTH=50
+          MAX_RETRIES=3
+          RETRY_DELAY=2
+          EOF
+
+      - name: Видео жасап YouTube-ке жүктеу
+        run: python -c "from video_gen import generate_video; generate_video()"
