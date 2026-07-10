@@ -366,6 +366,12 @@ def send_telegram(message: str):
     except Exception:
         pass
 
+def pick_rotating_tags(exclude_tags, count=5):
+    """STRONG_HASHTAG_POOL-дан exclude_tags-пен қайталанбайтын тегтерді таңдау."""
+    excluded = {t.lower() for t in exclude_tags.split()}
+    pool = [t for t in STRONG_HASHTAG_POOL if t.lower() not in excluded]
+    return ' '.join(random.sample(pool, min(count, len(pool))))
+
 def get_ai_content(track=None):
     """Groq API (OpenAI-үйлесімді chat completions) арқылы сценарий + тақырып +
     хештегтер алу. `track` берілсе (Deezer-ден табылған трендтегі ән), сценарий
@@ -375,10 +381,11 @@ def get_ai_content(track=None):
     models_to_try = ["openai/gpt-oss-20b", "openai/gpt-oss-120b", "qwen/qwen3.6-27b"]
 
     hook_start = random.choice(HOOK_STARTERS)
-    rotating_tags = ' '.join(random.sample(STRONG_HASHTAG_POOL, 5))
 
     if track:
-        niche_tags = "#music #newmusic #trending"
+        artist_tag = '#' + (re.sub(r'[^A-Za-z0-9]', '', track["artist"]) or 'artist')
+        niche_tags = f"#music #newmusic {artist_tag}"
+        rotating_tags = pick_rotating_tags(niche_tags)
         prompt = (
             f'Create viral YouTube Shorts content about the song "{track["title"]}" by {track["artist"]}, '
             'which is currently on Deezer\'s global trending chart.\n'
@@ -397,6 +404,7 @@ def get_ai_content(track=None):
         )
     else:
         topic, niche_tags = random.choice(MUSIC_TOPICS_FALLBACK)
+        rotating_tags = pick_rotating_tags(niche_tags)
         prompt = (
             f'Create viral YouTube Shorts content about {topic}.\n'
             f'The hook MUST start with: "{hook_start}"\n'
@@ -468,7 +476,8 @@ def get_ai_content(track=None):
             "of them. Follow for more."
         )
         fallback_title = "Why This Kind of Song Always Goes Viral"
-    fallback_hashtags = f"#music #newmusic #trending #musicfacts {' '.join(random.sample(STRONG_HASHTAG_POOL, 4))} #shorts"
+    fallback_niche = "#music #newmusic #trending #musicfacts"
+    fallback_hashtags = f"{fallback_niche} {pick_rotating_tags(fallback_niche, 4)} #shorts"
     fallback_desc = f"{fallback_script}\n\n{fallback_hashtags}"
     return validate_script(fallback_script), fallback_title, fallback_desc, parse_hashtags_to_tags(fallback_hashtags)
 
@@ -614,7 +623,8 @@ def generate_video(script_override: str = None, skip_upload: bool = False):
         if script_override:
             script = validate_script(script_override)
             video_title = f"Music Facts #shorts"
-            override_hashtags = f"#music #newmusic #shorts #musicfacts {' '.join(random.sample(STRONG_HASHTAG_POOL, 3))}"
+            override_niche = "#music #newmusic #shorts #musicfacts"
+            override_hashtags = f"{override_niche} {pick_rotating_tags(override_niche, 3)}"
             video_description = f"{script}\n\n{override_hashtags}"
             video_tags = parse_hashtags_to_tags(override_hashtags)
             logger.info("Жіберілген мәтін қолданылды")
